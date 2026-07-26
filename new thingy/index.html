@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NEXRAD Level II Radar Viewer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/bzip2/1.0.0/bzip2.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/nexrad-level-2-data@2.4.3/dist/nexrad-level-2-data.min.js"></script>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #0b0e17; color: #eef2f8; height:100vh; overflow:hidden;
+      user-select: none;
+    }
+    #app { display:flex; flex-direction:column; height:100vh; position:relative; }
+    #topbar {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:10px 20px; background:rgba(11,14,23,0.92); backdrop-filter:blur(14px);
+      border-bottom:1px solid rgba(255,255,255,0.06); z-index:1000;
+      flex-shrink:0; flex-wrap:wrap; gap:8px;
+    }
+    #topbar .brand { display:flex; align-items:center; gap:10px; font-weight:600; font-size:17px; color:#c8d8f0; }
+    #topbar .brand .badge {
+      background:rgba(64,128,255,0.18); padding:3px 12px; border-radius:100px;
+      font-size:10px; font-weight:500; color:#6a9aff; text-transform:uppercase; letter-spacing:0.3px;
+    }
+    #topbar .controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .pill-btn {
+      appearance:none; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.08);
+      padding:6px 16px; border-radius:100px; color:#bcc9dd; font-size:12px; font-weight:500;
+      cursor:pointer; transition:all .25s ease; backdrop-filter:blur(4px);
+      font-family:inherit; display:inline-flex; align-items:center; gap:6px;
+    }
+    .pill-btn:hover { background:rgba(255,255,255,0.12); border-color:rgba(255,255,255,0.18); color:#fff; transform:translateY(-1px); }
+    .pill-btn.primary { background:rgba(64,128,255,0.2); border-color:rgba(64,128,255,0.25); color:#8ab4ff; }
+    .pill-btn.primary:hover { background:rgba(64,128,255,0.3); border-color:rgba(64,128,255,0.4); color:#a8c8ff; }
+    .pill-btn .icon { font-size:14px; line-height:1; }
+    #statusDisplay {
+      font-size:12px; color:#8a9bb5; background:rgba(255,255,255,0.04);
+      padding:4px 14px; border-radius:100px; border:1px solid rgba(255,255,255,0.06);
+      white-space:nowrap; max-width:300px; overflow:hidden; text-overflow:ellipsis;
+    }
+    #map { flex:1; width:100%; background:#0b0e17; position:relative; }
+    .leaflet-tile-pane { filter:brightness(0.85) contrast(1.05) saturate(0.7); }
+    .leaflet-control-zoom { border:none !important; box-shadow:0 8px 32px rgba(0,0,0,0.5) !important; }
+    .leaflet-control-zoom a { background:rgba(20,26,40,0.85) !important; backdrop-filter:blur(8px) !important; color:#c8d8f0 !important; border-color:rgba(255,255,255,0.06) !important; }
+    #sites-bar {
+      position:absolute; bottom:28px; left:50%; transform:translateX(-50%); z-index:900;
+      display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:6px;
+      padding:12px 18px; background:rgba(11,14,23,0.80); backdrop-filter:blur(18px);
+      border-radius:60px; border:1px solid rgba(255,255,255,0.06);
+      box-shadow:0 16px 60px rgba(0,0,0,0.7); max-width:94vw; max-height:150px;
+      overflow-y:auto; scrollbar-width:thin; scrollbar-color:rgba(255,255,255,0.08) transparent;
+    }
+    #sites-bar::-webkit-scrollbar { width:4px; }
+    #sites-bar::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.12); border-radius:10px; }
+    #sites-bar .site-pill {
+      appearance:none; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.06);
+      padding:5px 14px; border-radius:100px; color:#9aabc4; font-size:11px; font-weight:500;
+      cursor:pointer; transition:all .25s ease; font-family:inherit; letter-spacing:0.4px;
+      text-transform:uppercase; flex-shrink:0;
+    }
+    #sites-bar .site-pill:hover { background:rgba(255,255,255,0.10); border-color:rgba(255,255,255,0.15); color:#d8e4f4; transform:translateY(-1px); }
+    #sites-bar .site-pill.active { background:rgba(64,128,255,0.25); border-color:rgba(64,128,255,0.4); color:#fff; }
+    #sites-bar .site-pill .code { font-weight:600; color:#c8d8f0; }
+    #sites-bar .site-pill .name { font-weight:300; font-size:9px; opacity:0.6; margin-left:4px; text-transform:none; }
+    #time-controls {
+      position:absolute; bottom:100px; left:50%; transform:translateX(-50%); z-index:850;
+      display:none; align-items:center; gap:10px; padding:8px 16px;
+      background:rgba(11,14,23,0.72); backdrop-filter:blur(14px); border-radius:40px;
+      border:1px solid rgba(255,255,255,0.06); box-shadow:0 8px 32px rgba(0,0,0,0.5);
+      flex-wrap:wrap; justify-content:center;
+    }
+    #time-controls .btn-icon {
+      background:rgba(255,255,255,0.06); border:none; color:#bcc9dd; width:32px; height:32px;
+      border-radius:50%; cursor:pointer; font-size:14px; display:flex; align-items:center;
+      justify-content:center; transition:all .2s;
+    }
+    #time-controls .btn-icon:hover { background:rgba(255,255,255,0.12); color:#fff; }
+    #time-controls .btn-icon.playing { background:rgba(64,128,255,0.25); color:#8ab4ff; }
+    #time-slider { width:150px; accent-color:#6a9aff; cursor:pointer; background:rgba(255,255,255,0.1); border-radius:10px; height:4px; }
+    #time-index { font-size:11px; color:#8a9bb5; min-width:60px; text-align:center; }
+    @media (max-width:640px) {
+      #time-slider { width:90px; }
+      #time-controls { padding:6px 12px; gap:6px; bottom:80px; }
+      #time-controls .btn-icon { width:28px; height:28px; font-size:12px; }
+      #sites-bar { padding:10px 14px; gap:5px; bottom:18px; max-height:110px; }
+      #sites-bar .site-pill { font-size:10px; padding:4px 10px; }
+      #topbar .brand { font-size:14px; }
+      .pill-btn { font-size:10px; padding:4px 12px; }
+      #statusDisplay { font-size:10px; max-width:150px; }
+    }
+    #legend {
+      position:absolute; bottom:100px; right:20px; z-index:800;
+      background:rgba(11,14,23,0.72); backdrop-filter:blur(12px); border-radius:14px;
+      padding:12px 14px; border:1px solid rgba(255,255,255,0.05);
+      font-size:10px; color:#7a8ba5; display:none; min-width:100px;
+      box-shadow:0 12px 40px rgba(0,0,0,0.5);
+    }
+    #legend.visible { display:block; }
+    #legend .title { font-weight:500; color:#bcc9dd; margin-bottom:4px; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; }
+    #legend .row { display:flex; align-items:center; gap:8px; padding:2px 0; }
+    #legend .swatch { width:18px; height:8px; border-radius:4px; flex-shrink:0; }
+    #loading {
+      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); z-index:800;
+      background:rgba(11,14,23,0.88); backdrop-filter:blur(16px); padding:24px 40px;
+      border-radius:24px; border:1px solid rgba(255,255,255,0.06);
+      box-shadow:0 32px 80px rgba(0,0,0,0.7); display:none; flex-direction:column;
+      align-items:center; gap:14px; pointer-events:none;
+    }
+    #loading.visible { display:flex; }
+    #loading .spinner {
+      width:32px; height:32px; border:3px solid rgba(255,255,255,0.06);
+      border-top-color:#6a9aff; border-radius:50%;
+      animation:spin .9s cubic-bezier(.4,0,.2,1) infinite;
+    }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    #loading .label { font-size:13px; color:#8a9bb5; }
+    #loading .label strong { color:#c8d8f0; }
+    .leaflet-popup-content-wrapper { background:rgba(11,14,23,0.9)!important; backdrop-filter:blur(8px)!important; color:#c8d8f0!important; border:1px solid rgba(255,255,255,0.06)!important; border-radius:12px!important; }
+    .leaflet-popup-tip { background:rgba(11,14,23,0.9)!important; }
+    .leaflet-popup-content { font-size:13px!important; font-weight:500!important; }
+    .site-marker-default { fill:#1a3a6a; color:#4a8aff; weight:1.5; opacity:0.8; fill-opacity:0.7; }
+    .site-marker-selected { fill:#4a8aff; color:#8ab4ff; weight:3; opacity:1; fill-opacity:0.9; }
+    /* Debug panel */
+    #debug-panel {
+      position:absolute; top:60px; right:10px; z-index:950;
+      background:rgba(0,0,0,0.85); backdrop-filter:blur(8px);
+      padding:10px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.1);
+      font-size:11px; color:#8a9bb5; max-width:400px; max-height:300px;
+      overflow:auto; display:none; font-family:monospace;
+      white-space:pre-wrap; word-break:break-all;
+    }
+    #debug-panel.visible { display:block; }
+    #debug-panel strong { color:#c8d8f0; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand"><span>⛈️ NEXRAD</span><span class="badge">Level II · BZ2</span></div>
+    <div class="controls">
+      <span id="statusDisplay">● Ready</span>
+      <button class="pill-btn primary" id="btnRefresh"><span class="icon">⟳</span> Refresh</button>
+      <button class="pill-btn" id="btnDebug"><span class="icon">🐞</span> Debug</button>
+    </div>
+  </header>
+  <div id="map"></div>
+  <div id="sites-bar"></div>
+  <div id="time-controls">
+    <button class="btn-icon" id="btnPrev" title="Previous">◀</button>
+    <button class="btn-icon" id="btnPlay" title="Play/Pause">▶</button>
+    <button class="btn-icon" id="btnNext" title="Next">▶</button>
+    <input type="range" id="time-slider" min="0" max="0" value="0" />
+    <span id="time-index">0 / 0</span>
+  </div>
+  <div id="legend">
+    <div class="title">Reflectivity (dBZ)</div>
+    <div class="row"><span class="swatch" style="background:#1a2a4a;"></span> 0–10</div>
+    <div class="row"><span class="swatch" style="background:#2a5a7a;"></span> 10–20</div>
+    <div class="row"><span class="swatch" style="background:#3a8a5a;"></span> 20–30</div>
+    <div class="row"><span class="swatch" style="background:#d4a030;"></span> 30–40</div>
+    <div class="row"><span class="swatch" style="background:#d46a20;"></span> 40–50</div>
+    <div class="row"><span class="swatch" style="background:#c04030;"></span> 50–60</div>
+    <div class="row"><span class="swatch" style="background:#8a2040;"></span> 60+</div>
+  </div>
+  <div id="loading">
+    <div class="spinner"></div>
+    <div class="label">Loading <strong id="loadingSite">KXXX</strong> …</div>
+  </div>
+  <div id="debug-panel"></div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════
+   NEXRAD Level II Radar Viewer – fixed to match the real
+   nexrad-level-2-data v2.x API (see API.md in that repo):
+
+     - getHighresReflectivity([scan]) returns HighResData objects
+       whose fields are: gate_count, gate_size, first_gate,
+       rf_threshold, snr_threshold, scale, offset, moment_data.
+       There is NO `azimuth` or `data` field on these objects.
+     - Azimuths are a *separate* parallel array from getAzimuth().
+     - moment_data holds raw scaled integers. Real dBZ = (raw -
+       offset) / scale. Raw values of 0/1 are reserved (below
+       threshold / no data) and must be skipped.
+     - An elevation must be selected first with setElevation().
+     - There is no getFirstGate()/getGateSpacing() on Level2Radar;
+       first_gate/gate_size live on each HighResData object.
+   ═══════════════════════════════════════════════════════════════════ */
+
+const RADAR_SITES = [
+  { code: 'KABR', name: 'Aberdeen', lat: 45.455, lon: -98.413 },
+  { code: 'KABX', name: 'Albuquerque', lat: 35.150, lon: -106.823 },
+  { code: 'KAKQ', name: 'Wakefield', lat: 36.984, lon: -77.007 },
+  { code: 'KAMA', name: 'Amarillo', lat: 35.233, lon: -101.709 },
+  { code: 'KAMX', name: 'Miami', lat: 25.611, lon: -80.413 },
+  { code: 'KAPX', name: 'Gaylord', lat: 44.907, lon: -84.720 },
+  { code: 'KARX', name: 'La Crosse', lat: 43.823, lon: -91.191 },
+  { code: 'KATX', name: 'Seattle', lat: 48.194, lon: -122.496 },
+  { code: 'KBBX', name: 'Beale', lat: 39.496, lon: -121.632 },
+  { code: 'KBGM', name: 'Binghamton', lat: 42.200, lon: -75.985 },
+  { code: 'KBHX', name: 'Eureka', lat: 40.498, lon: -124.293 },
+  { code: 'KBIS', name: 'Bismarck', lat: 46.771, lon: -100.761 },
+  { code: 'KBLX', name: 'Billings', lat: 45.854, lon: -108.607 },
+  { code: 'KBMX', name: 'Birmingham', lat: 33.172, lon: -86.770 },
+  { code: 'KBOX', name: 'Boston', lat: 41.956, lon: -71.137 },
+  { code: 'KBRO', name: 'Brownsville', lat: 25.916, lon: -97.419 },
+  { code: 'KBUF', name: 'Buffalo', lat: 42.949, lon: -78.737 },
+  { code: 'KBYX', name: 'Key West', lat: 24.598, lon: -81.703 },
+  { code: 'KCAE', name: 'Columbia', lat: 33.948, lon: -81.119 },
+  { code: 'KCBW', name: 'Caribou', lat: 46.039, lon: -67.806 },
+  { code: 'KCCX', name: 'State College', lat: 40.923, lon: -78.004 },
+  { code: 'KCLX', name: 'Charleston', lat: 32.655, lon: -81.042 },
+  { code: 'KCRP', name: 'Corpus Christi', lat: 27.784, lon: -97.511 },
+  { code: 'KCXX', name: 'Burlington', lat: 44.511, lon: -73.166 },
+  { code: 'KCYS', name: 'Cheyenne', lat: 41.152, lon: -104.806 },
+  { code: 'KDAX', name: 'Sacramento', lat: 38.501, lon: -121.678 },
+  { code: 'KDDC', name: 'Dodge City', lat: 37.761, lon: -99.969 },
+  { code: 'KDFX', name: 'Laughlin', lat: 29.270, lon: -100.281 },
+  { code: 'KDGX', name: 'Jackson', lat: 32.540, lon: -89.989 },
+  { code: 'KDIX', name: 'Philadelphia', lat: 39.947, lon: -74.411 },
+  { code: 'KDLH', name: 'Duluth', lat: 46.837, lon: -92.210 },
+  { code: 'KDMX', name: 'Des Moines', lat: 41.731, lon: -93.723 },
+  { code: 'KDOX', name: 'Dover', lat: 38.826, lon: -75.440 },
+  { code: 'KDVN', name: 'Davenport', lat: 41.612, lon: -90.581 },
+  { code: 'KDYX', name: 'Abilene', lat: 32.539, lon: -99.254 },
+  { code: 'KEAX', name: 'Kansas City', lat: 38.810, lon: -94.264 },
+  { code: 'KEMX', name: 'Tucson', lat: 31.894, lon: -110.630 },
+  { code: 'KENX', name: 'Albany', lat: 42.586, lon: -74.064 },
+  { code: 'KEVX', name: 'Eglin', lat: 30.565, lon: -85.922 },
+  { code: 'KEWX', name: 'Austin', lat: 29.704, lon: -98.028 },
+  { code: 'KEYX', name: 'San Diego', lat: 35.098, lon: -117.561 },
+  { code: 'KFCX', name: 'Roanoke', lat: 37.024, lon: -80.274 },
+  { code: 'KFDR', name: 'Oklahoma City', lat: 34.362, lon: -98.538 },
+  { code: 'KFDX', name: 'Cannon AFB', lat: 34.634, lon: -103.619 },
+  { code: 'KFFC', name: 'Atlanta', lat: 33.364, lon: -84.566 },
+  { code: 'KFSD', name: 'Sioux Falls', lat: 43.588, lon: -96.729 },
+  { code: 'KFSX', name: 'Flagstaff', lat: 34.575, lon: -111.198 },
+  { code: 'KFTG', name: 'Denver', lat: 39.787, lon: -104.546 },
+  { code: 'KFWS', name: 'Dallas', lat: 32.573, lon: -97.303 },
+  { code: 'KGGW', name: 'Glasgow', lat: 48.206, lon: -106.625 },
+  { code: 'KGJX', name: 'Grand Junction', lat: 39.062, lon: -108.214 },
+  { code: 'KGLD', name: 'Goodland', lat: 39.367, lon: -101.700 },
+  { code: 'KGRB', name: 'Green Bay', lat: 44.498, lon: -88.111 },
+  { code: 'KGRK', name: 'Fort Hood', lat: 30.722, lon: -97.383 },
+  { code: 'KGRR', name: 'Grand Rapids', lat: 42.894, lon: -85.545 },
+  { code: 'KGSP', name: 'Greenville', lat: 34.883, lon: -82.220 },
+  { code: 'KGWX', name: 'Columbus', lat: 33.896, lon: -88.329 },
+  { code: 'KGYX', name: 'Portland', lat: 43.891, lon: -70.256 },
+  { code: 'KHDX', name: 'Holloman', lat: 33.077, lon: -106.120 },
+  { code: 'KHGX', name: 'Houston', lat: 29.472, lon: -95.079 },
+  { code: 'KHNX', name: 'Hanford', lat: 36.314, lon: -119.632 },
+  { code: 'KHPX', name: 'Fort Campbell', lat: 36.737, lon: -87.285 },
+  { code: 'KHTX', name: 'Huntsville', lat: 34.930, lon: -86.083 },
+  { code: 'KICT', name: 'Wichita', lat: 37.654, lon: -97.443 },
+  { code: 'KICX', name: 'Cedar City', lat: 37.591, lon: -112.862 },
+  { code: 'KILN', name: 'Wilmington', lat: 39.420, lon: -83.822 },
+  { code: 'KILX', name: 'Lincoln', lat: 40.151, lon: -89.337 },
+  { code: 'KIND', name: 'Indianapolis', lat: 39.708, lon: -86.280 },
+  { code: 'KINX', name: 'Tulsa', lat: 36.175, lon: -95.564 },
+  { code: 'KIWA', name: 'Phoenix', lat: 33.289, lon: -111.670 },
+  { code: 'KIWX', name: 'North Webster', lat: 41.359, lon: -85.700 },
+  { code: 'KJAX', name: 'Jacksonville', lat: 30.484, lon: -81.702 },
+  { code: 'KJGX', name: 'Atlanta', lat: 33.319, lon: -82.993 },
+  { code: 'KJKL', name: 'Jackson', lat: 37.591, lon: -83.313 },
+  { code: 'KLBB', name: 'Lubbock', lat: 33.654, lon: -101.814 },
+  { code: 'KLCH', name: 'Lake Charles', lat: 30.125, lon: -93.216 },
+  { code: 'KLGX', name: 'Seattle', lat: 47.116, lon: -124.107 },
+  { code: 'KLIX', name: 'New Orleans', lat: 30.337, lon: -89.826 },
+  { code: 'KLNX', name: 'North Platte', lat: 41.958, lon: -100.576 },
+  { code: 'KLOT', name: 'Chicago', lat: 41.604, lon: -88.085 },
+  { code: 'KLVX', name: 'Louisville', lat: 37.975, lon: -85.944 },
+  { code: 'KLWX', name: 'Sterling', lat: 38.976, lon: -77.488 },
+  { code: 'KLZK', name: 'Little Rock', lat: 34.837, lon: -92.262 },
+  { code: 'KMAF', name: 'Midland', lat: 31.943, lon: -102.189 },
+  { code: 'KMAX', name: 'Medford', lat: 42.081, lon: -122.717 },
+  { code: 'KMBH', name: 'Springfield', lat: 36.767, lon: -93.195 },
+  { code: 'KMCD', name: 'Mackinac', lat: 45.997, lon: -84.769 },
+  { code: 'KMCI', name: 'Kansas City', lat: 38.853, lon: -94.657 },
+  { code: 'KMHX', name: 'Morehead City', lat: 34.776, lon: -76.876 },
+  { code: 'KMKX', name: 'Milwaukee', lat: 42.968, lon: -88.551 },
+  { code: 'KMLB', name: 'Melbourne', lat: 28.113, lon: -80.654 },
+  { code: 'KMOB', name: 'Mobile', lat: 30.679, lon: -88.240 },
+  { code: 'KMPX', name: 'Minneapolis', lat: 44.849, lon: -93.566 },
+  { code: 'KMQT', name: 'Marquette', lat: 46.531, lon: -87.548 },
+  { code: 'KMRX', name: 'Knoxville', lat: 36.169, lon: -83.402 },
+  { code: 'KMSX', name: 'Missoula', lat: 47.041, lon: -113.986 },
+  { code: 'KMTX', name: 'Salt Lake City', lat: 41.263, lon: -112.448 },
+  { code: 'KMUX', name: 'San Francisco', lat: 37.155, lon: -121.898 },
+  { code: 'KMVX', name: 'Fargo', lat: 47.528, lon: -97.326 },
+  { code: 'KMXX', name: 'Montgomery', lat: 32.537, lon: -85.790 },
+  { code: 'KNKX', name: 'San Diego', lat: 32.919, lon: -117.042 },
+  { code: 'KNQA', name: 'Memphis', lat: 35.345, lon: -89.873 },
+  { code: 'KOAX', name: 'Omaha', lat: 41.320, lon: -96.366 },
+  { code: 'KOHX', name: 'Nashville', lat: 36.247, lon: -86.562 },
+  { code: 'KOKX', name: 'New York', lat: 40.866, lon: -72.864 },
+  { code: 'KOTX', name: 'Spokane', lat: 47.680, lon: -117.627 },
+  { code: 'KPAH', name: 'Paducah', lat: 37.068, lon: -88.772 },
+  { code: 'KPBZ', name: 'Pittsburgh', lat: 40.532, lon: -80.218 },
+  { code: 'KPDT', name: 'Pendleton', lat: 45.690, lon: -118.853 },
+  { code: 'KPHI', name: 'Philadelphia', lat: 39.424, lon: -74.832 },
+  { code: 'KPOE', name: 'Fort Polk', lat: 31.155, lon: -92.976 },
+  { code: 'KPUX', name: 'Pueblo', lat: 38.460, lon: -104.183 },
+  { code: 'KRAX', name: 'Raleigh', lat: 35.665, lon: -78.490 },
+  { code: 'KRGX', name: 'Reno', lat: 39.754, lon: -119.462 },
+  { code: 'KRIW', name: 'Riverton', lat: 43.066, lon: -108.477 },
+  { code: 'KRLX', name: 'Charleston', lat: 38.311, lon: -81.723 },
+  { code: 'KRTX', name: 'Portland', lat: 45.715, lon: -122.965 },
+  { code: 'KSFX', name: 'Pocatello', lat: 43.106, lon: -112.686 },
+  { code: 'KSGF', name: 'Springfield', lat: 37.235, lon: -93.401 },
+  { code: 'KSHV', name: 'Shreveport', lat: 32.451, lon: -93.841 },
+  { code: 'KSJT', name: 'San Angelo', lat: 31.371, lon: -100.493 },
+  { code: 'KSOX', name: 'Santa Ana', lat: 33.818, lon: -117.636 },
+  { code: 'KSRX', name: 'Fort Smith', lat: 35.290, lon: -94.362 },
+  { code: 'KTBW', name: 'Tampa', lat: 27.706, lon: -82.402 },
+  { code: 'KTFX', name: 'Great Falls', lat: 47.460, lon: -111.385 },
+  { code: 'KTLH', name: 'Tallahassee', lat: 30.398, lon: -84.329 },
+  { code: 'KTWX', name: 'Topeka', lat: 38.997, lon: -96.233 },
+  { code: 'KTYX', name: 'Montague', lat: 43.756, lon: -75.680 },
+  { code: 'KUDX', name: 'Rapid City', lat: 44.125, lon: -102.830 },
+  { code: 'KUEX', name: 'Hastings', lat: 40.321, lon: -98.442 },
+  { code: 'KVAX', name: 'Moody AFB', lat: 30.891, lon: -83.002 },
+  { code: 'KVBX', name: 'Vandenberg', lat: 34.838, lon: -120.398 },
+  { code: 'KVNX', name: 'Enid', lat: 36.741, lon: -98.128 },
+  { code: 'KVTX', name: 'Los Angeles', lat: 34.412, lon: -119.179 },
+  { code: 'KVWX', name: 'Evansville', lat: 38.260, lon: -87.725 },
+  { code: 'KWDT', name: 'Wilmington', lat: 34.706, lon: -79.497 },
+  { code: 'KWMQ', name: 'White Sands', lat: 32.269, lon: -105.508 },
+  { code: 'KXTA', name: 'Cape Canaveral', lat: 28.468, lon: -80.565 },
+  { code: 'KYUX', name: 'Yuma', lat: 32.495, lon: -114.653 }
+];
+
+// ─── State ──────────────────────────────────────────────────────────
+const state = {
+  selectedSite: 'KBBX',
+  radarLayer: null,
+  compositeLayer: null,
+  loading: false,
+  fileList: [],
+  currentIndex: 0,
+  isPlaying: false,
+  playInterval: null,
+  parsedDataCache: new Map(),
+  siteMarkers: null,
+};
+
+// ─── DOM refs ──────────────────────────────────────────────────────
+const mapEl = document.getElementById('map');
+const sitesBar = document.getElementById('sites-bar');
+const statusEl = document.getElementById('statusDisplay');
+const loadingEl = document.getElementById('loading');
+const loadingSiteEl = document.getElementById('loadingSite');
+const legendEl = document.getElementById('legend');
+const btnRefresh = document.getElementById('btnRefresh');
+const btnDebug = document.getElementById('btnDebug');
+const timeControls = document.getElementById('time-controls');
+const btnPrev = document.getElementById('btnPrev');
+const btnPlay = document.getElementById('btnPlay');
+const btnNext = document.getElementById('btnNext');
+const timeSlider = document.getElementById('time-slider');
+const timeIndex = document.getElementById('time-index');
+const debugPanel = document.getElementById('debug-panel');
+
+// ─── Map ──────────────────────────────────────────────────────────
+const map = L.map(mapEl, { center: [39.5, -98.5], zoom: 5, zoomControl: true });
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>, &copy; CartoDB',
+  subdomains: 'abcd', minZoom: 3, maxZoom: 19,
+}).addTo(map);
+
+// ─── Helpers ──────────────────────────────────────────────────────
+function setStatus(text, isGood = true) {
+  statusEl.textContent = text;
+  statusEl.style.color = isGood ? '#8a9bb5' : '#d63d4a';
+}
+
+function showLoading(siteCode) { loadingSiteEl.textContent = siteCode || '...'; loadingEl.classList.add('visible'); state.loading = true; }
+function hideLoading() { loadingEl.classList.remove('visible'); state.loading = false; }
+function getSiteByCode(code) { return RADAR_SITES.find(s => s.code === code); }
+
+// ─── Debug logging (visible on page, toggled by the Debug button) ─
+let debugVisible = true;
+function debugLog(msg) {
+  console.log(msg);
+  if (debugVisible) debugPanel.classList.add('visible');
+  debugPanel.textContent += msg + '\n';
+  debugPanel.scrollTop = debugPanel.scrollHeight;
+}
+function debugClear() { debugPanel.textContent = ''; }
+btnDebug.addEventListener('click', () => {
+  debugVisible = !debugVisible;
+  debugPanel.classList.toggle('visible', debugVisible);
+});
+
+// ─── Proxy via Netlify Edge Function ──────────────────────────────
+// IMPORTANT: this must be routed to a Netlify EDGE Function
+// (netlify/edge-functions/nexrad-proxy.js), not a regular serverless
+// function or a plain [[redirects]] proxy rule. Regular functions/redirects
+// run through AWS Lambda and are capped at 6MB (buffered) / 20MB (streamed)
+// response payloads - NEXRAD Level II files are often 5-20+MB and will get
+// silently truncated mid-download on that path. Edge Functions run on Deno
+// at the edge and stream responses of any size with no such cap.
+async function fetchViaRedirect(url, timeoutMs = 20000) {
+  const proxyUrl = '/api/nomads' + url.replace('https://nomads.ncep.noaa.gov', '');
+  debugLog(`Fetching: ${proxyUrl}`);
+  const t0 = performance.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(proxyUrl, { signal: controller.signal });
+    const contentLength = resp.headers.get('content-length');
+    debugLog(`-> HTTP ${resp.status} in ${(performance.now()-t0).toFixed(0)}ms` + (contentLength ? ` (content-length: ${(contentLength/1024/1024).toFixed(2)} MB)` : ' (no content-length header - chunked)'));
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      debugLog(`-> TIMED OUT after ${timeoutMs}ms with no response`);
+      throw new Error(`Request timed out after ${timeoutMs}ms (proxy or NOAA server not responding)`);
+    }
+    debugLog(`-> FAILED: ${err.message}`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ─── All‑site markers ─────────────────────────────────────────────
+function createAllSiteMarkers() {
+  if (state.siteMarkers) map.removeLayer(state.siteMarkers);
+  const group = L.layerGroup();
+  RADAR_SITES.forEach(site => {
+    const marker = L.circleMarker([site.lat, site.lon], {
+      radius: 5, color: '#4a8aff', weight: 1.5, opacity: 0.8,
+      fillColor: '#1a3a6a', fillOpacity: 0.7,
+    });
+    marker._siteCode = site.code;
+    marker.bindPopup(`<b>${site.code}</b> ${site.name}`);
+    marker.on('click', () => selectSite(site.code));
+    group.addLayer(marker);
+  });
+  group.addTo(map);
+  state.siteMarkers = group;
+}
+
+function updateSiteMarkerHighlight(selectedCode) {
+  if (!state.siteMarkers) return;
+  state.siteMarkers.eachLayer(marker => {
+    const code = marker._siteCode;
+    if (code === selectedCode) {
+      marker.setStyle({ radius: 7, color: '#8ab4ff', weight: 3, opacity: 1, fillColor: '#4a8aff', fillOpacity: 0.9 });
+      marker.openPopup();
+    } else {
+      marker.setStyle({ radius: 5, color: '#4a8aff', weight: 1.5, opacity: 0.8, fillColor: '#1a3a6a', fillOpacity: 0.7 });
+      marker.closePopup();
+    }
+  });
+}
+
+// ─── Build Site Pills ─────────────────────────────────────────────
+function buildSitePills() {
+  sitesBar.innerHTML = '';
+  RADAR_SITES.forEach(site => {
+    const btn = document.createElement('button');
+    btn.className = 'site-pill' + (site.code === state.selectedSite ? ' active' : '');
+    btn.dataset.code = site.code;
+    btn.innerHTML = `<span class="code">${site.code}</span><span class="name">${site.name}</span>`;
+    btn.addEventListener('click', () => selectSite(site.code));
+    sitesBar.appendChild(btn);
+  });
+  const active = sitesBar.querySelector('.site-pill.active');
+  if (active) active.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+}
+
+// ─── Select Site ──────────────────────────────────────────────────
+function selectSite(code) {
+  if (state.loading) return;
+  stopPlayback();
+  state.selectedSite = code;
+  document.querySelectorAll('.site-pill').forEach(el => el.classList.toggle('active', el.dataset.code === code));
+  updateSiteMarkerHighlight(code);
+  const site = getSiteByCode(code);
+  if (site) map.setView([site.lat, site.lon], 8, { animate: true });
+  if (state.radarLayer) { map.removeLayer(state.radarLayer); state.radarLayer = null; }
+  if (state.compositeLayer) { map.removeLayer(state.compositeLayer); state.compositeLayer = null; }
+  legendEl.classList.remove('visible');
+  timeControls.style.display = 'none';
+  state.fileList = [];
+  state.parsedDataCache.clear();
+  debugClear();
+  fetchFileList(code);
+}
+
+// ─── Fetch File List ──────────────────────────────────────────────
+async function fetchFileList(code) {
+  showLoading(code);
+  setStatus(`⏳ Fetching ${code} …`);
+  try {
+    const targetUrl = `https://nomads.ncep.noaa.gov/pub/data/nccf/radar/nexrad_level2/${code}/?C=M;O=D`;
+    const resp = await fetchViaRedirect(targetUrl);
+    const html = await resp.text();
+    const lines = html.split('\n');
+    const bz2Files = [];
+    for (const line of lines) {
+      const match = line.match(/href="([^"]+\.bz2)"/i);
+      if (match) bz2Files.push(match[1]);
+    }
+    if (bz2Files.length === 0) throw new Error('No .bz2 files found');
+    bz2Files.sort((a, b) => b.localeCompare(a));
+    state.fileList = bz2Files;
+    timeControls.style.display = 'flex';
+    timeSlider.max = state.fileList.length - 1;
+    timeSlider.value = 0;
+    timeIndex.textContent = `1 / ${state.fileList.length}`;
+    state.currentIndex = 0;
+    const ok = await loadRadarFile(code, state.fileList[0]);
+    legendEl.classList.add('visible');
+    if (ok) setStatus(`✓ ${code} · ${state.fileList.length} scans`, true);
+  } catch (err) {
+    console.error('Fetch error:', err);
+    setStatus(`✗ ${code} · ${err.message}`, false);
+    hideLoading();
+    timeControls.style.display = 'none';
+    loadCompositeFallback(code);
+  } finally {
+    hideLoading();
+  }
+}
+
+// ─── Load a specific radar file ──────────────────────────────────
+async function loadRadarFile(code, filename) {
+  showLoading(code);
+  setStatus(`⏳ ${filename} …`);
+  debugLog(`=== Loading ${filename} ===`);
+  try {
+    let parsed = state.parsedDataCache.get(filename);
+    if (!parsed) {
+      const fileUrl = `https://nomads.ncep.noaa.gov/pub/data/nccf/radar/nexrad_level2/${code}/${filename}`;
+      const t0 = performance.now();
+      setStatus(`⏳ Downloading ${filename} …`);
+      const resp = await fetchViaRedirect(fileUrl);
+
+      let arrayBuffer;
+      try {
+        arrayBuffer = await resp.arrayBuffer();
+      } catch (bodyErr) {
+        // If this still fails after switching to the edge-function proxy,
+        // it means the connection genuinely dropped mid-stream (NOAA-side
+        // hiccup, flaky network, etc) rather than a size-cap truncation -
+        // surface that distinction clearly instead of a bare "Failed to fetch".
+        throw new Error(`Connection dropped while downloading the file body: ${bodyErr.message}`);
+      }
+      const compressed = new Uint8Array(arrayBuffer);
+      debugLog(`Downloaded ${(compressed.length/1024/1024).toFixed(2)} MB in ${(performance.now()-t0).toFixed(0)}ms`);
+      if (compressed.length === 0) throw new Error('Downloaded 0 bytes - empty response body');
+
+      // Yield one frame so the browser can actually paint the status
+      // update above before we block the main thread with synchronous
+      // bzip2 decompression (which can take real time on multi-MB files).
+      setStatus(`⏳ Decompressing ${filename} …`);
+      await new Promise(r => setTimeout(r, 0));
+
+      const t1 = performance.now();
+      let decompressed;
+      try {
+        decompressed = bzip2.simple(compressed);
+        debugLog(`Decompressed (simple) to ${(decompressed.length/1024/1024).toFixed(2)} MB in ${(performance.now()-t1).toFixed(0)}ms`);
+      } catch (bzErr) {
+        debugLog(`bzip2.simple failed (${bzErr.message}), trying streaming fallback`);
+        const stream = new bzip2.Bzip2Stream(compressed);
+        const chunks = [];
+        let chunk;
+        let guard = 0;
+        const GUARD_MAX = 200000; // hard cap so a misbehaving stream can't hang forever
+        while ((chunk = stream.read(8192)) !== null) {
+          chunks.push(chunk);
+          if (++guard > GUARD_MAX) throw new Error('BZ2 streaming fallback exceeded safety limit');
+        }
+        const totalLen = chunks.reduce((a, c) => a + c.length, 0);
+        decompressed = new Uint8Array(totalLen);
+        let offset = 0;
+        for (const c of chunks) { decompressed.set(c, offset); offset += c.length; }
+        debugLog(`Decompressed (streaming) to ${(decompressed.length/1024/1024).toFixed(2)} MB in ${(performance.now()-t1).toFixed(0)}ms`);
+      }
+
+      // Yield again before the (also synchronous) radar parsing step.
+      setStatus(`⏳ Parsing ${filename} …`);
+      await new Promise(r => setTimeout(r, 0));
+
+      const t2 = performance.now();
+      // Level2Radar's constructor returns a Promise (see its README:
+      // `new Level2Radar(rawData).then(radar => ...)`), so awaiting
+      // the `new` expression directly works fine here.
+      const radar = await new window.nexradLevel2Data.Level2Radar(decompressed.buffer);
+      debugLog(`Parsed radar in ${(performance.now()-t2).toFixed(0)}ms`);
+
+      // A NEXRAD volume has several elevations (tilts). Pick the
+      // lowest one - it's the standard base reflectivity view.
+      const elevations = radar.listElevations();
+      if (!elevations || elevations.length === 0) throw new Error('No elevations found in file');
+      const chosenElevation = elevations[0];
+      radar.setElevation(chosenElevation);
+      debugLog(`Elevations: [${elevations.join(', ')}] -> using ${chosenElevation}`);
+
+      // IMPORTANT: getHighresReflectivity() objects do NOT contain an
+      // azimuth field - azimuths are a separate, parallel array from
+      // getAzimuth(). Both must be called with no `scan` argument to
+      // get every radial in the selected elevation.
+      let reflectivity = radar.getHighresReflectivity();
+      let azimuths = radar.getAzimuth();
+      if (!Array.isArray(reflectivity)) reflectivity = [reflectivity];
+      if (!Array.isArray(azimuths)) azimuths = [azimuths];
+
+      if (!reflectivity.length || !reflectivity[0] || !reflectivity[0].moment_data) {
+        throw new Error('No reflectivity data for this elevation');
+      }
+
+      debugLog(`Radials: ${reflectivity.length}, azimuths: ${azimuths.length}`);
+      const first = reflectivity[0];
+      debugLog(`gate_count=${first.gate_count} gate_size=${first.gate_size} first_gate=${first.first_gate} scale=${first.scale} offset=${first.offset}`);
+      if (first.moment_data && first.moment_data.length) {
+        debugLog(`First 10 raw moment values: ${Array.from(first.moment_data.slice(0, 10)).join(', ')}`);
+      }
+
+      parsed = { reflectivity, azimuths, radar };
+      state.parsedDataCache.set(filename, parsed);
+    }
+    const success = renderRadarData(parsed.reflectivity, parsed.azimuths, code);
+    if (success) {
+      timeSlider.value = state.currentIndex;
+      timeIndex.textContent = `${state.currentIndex + 1} / ${state.fileList.length}`;
+      setStatus(`✓ ${code} · ${filename}`, true);
+      legendEl.classList.add('visible');
+    } else {
+      debugLog('Rendering produced 0 pixels – falling back to composite');
+      loadCompositeFallback(code);
+    }
+    return success;
+  } catch (err) {
+    console.error('Load error:', err);
+    debugLog(`ERROR: ${err.message}`);
+    setStatus(`✗ ${filename} · ${err.message}`, false);
+    if (state.currentIndex === 0) loadCompositeFallback(code);
+    return false;
+  } finally {
+    hideLoading();
+  }
+}
+
+// ─── Render Radar Data (returns true if any pixel drawn) ────────
+function renderRadarData(reflectivity, azimuths, siteCode) {
+  if (state.radarLayer) map.removeLayer(state.radarLayer);
+  if (state.compositeLayer) map.removeLayer(state.compositeLayer);
+  const site = getSiteByCode(siteCode);
+  if (!site) return false;
+
+  const maxRange = 230; // km
+  const pixelSize = 0.5;
+  const size = Math.ceil(maxRange * 2 / pixelSize);
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const dbzColors = [
+    { max:0, color:[40,55,85] }, { max:10, color:[55,95,150] }, { max:20, color:[60,150,140] },
+    { max:30, color:[110,190,80] }, { max:40, color:[210,210,60] }, { max:45, color:[230,170,40] },
+    { max:50, color:[230,110,35] }, { max:55, color:[220,70,35] }, { max:60, color:[190,35,45] },
+    { max:70, color:[130,25,55] }
+  ];
+  function getDbzColor(dbz) {
+    if (dbz === null || dbz < -5) return [0,0,0,0];
+    for (const r of dbzColors) if (dbz <= r.max) return [...r.color, 235];
+    return [110,25,65,235];
+  }
+
+  const half = size/2;
+  let pixelsDrawn = 0;
+  let unitsLogged = false;
+
+  for (let ri = 0; ri < reflectivity.length; ri++) {
+    const radial = reflectivity[ri];
+    const azDeg = azimuths[ri];
+    if (!radial || !radial.moment_data || azDeg === undefined || azDeg === null) continue;
+
+    const az = azDeg * Math.PI / 180;
+    const data = radial.moment_data;
+    const scale = radial.scale || 1;
+    const offset = radial.offset || 0;
+
+    // first_gate/gate_size are reported by the radar in meters; the
+    // canvas math below is in km, so convert if the values look like
+    // meters (i.e. bigger than any real km distance for these fields).
+    let firstGateKm = radial.first_gate || 0;
+    let gateSizeKm = radial.gate_size || 0.25;
+    if (firstGateKm > 50) firstGateKm /= 1000;
+    if (gateSizeKm > 50) gateSizeKm /= 1000;
+    if (!unitsLogged) {
+      debugLog(`Using firstGate=${firstGateKm.toFixed(3)}km gateSize=${gateSizeKm.toFixed(3)}km`);
+      unitsLogged = true;
+    }
+
+    for (let i=0; i<data.length; i++) {
+      const raw = data[i];
+      // Per NEXRAD convention, raw values of 0 (below threshold) and
+      // 1 (range folded) carry no usable reflectivity - skip them.
+      if (raw === null || raw === undefined || raw <= 1) continue;
+      const dbz = (raw - offset) / scale;
+      const range = firstGateKm + i * gateSizeKm;
+      if (range > maxRange) break;
+      const x = half + Math.sin(az) * range / pixelSize;
+      const y = half - Math.cos(az) * range / pixelSize;
+      const r = Math.max(1.2, 1.8 - range / maxRange * 0.8);
+      const color = getDbzColor(dbz);
+      if (color[3] === 0) continue;
+      ctx.fillStyle = `rgba(${color[0]},${color[1]},${color[2]},${color[3]/255})`;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
+      pixelsDrawn++;
+    }
+  }
+  debugLog(`Pixels drawn: ${pixelsDrawn}`);
+
+  // Always draw a faint reference ring at the radar's max range, and a
+  // center dot at the site itself, independent of whether any actual
+  // reflectivity data was present. This lets you visually confirm the
+  // overlay is correctly positioned/opaque even on a clear-weather day
+  // with little or no real signal to draw.
+  ctx.strokeStyle = 'rgba(120,170,255,0.35)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 6]);
+  ctx.beginPath();
+  ctx.arc(half, half, half - 2, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(120,170,255,0.9)';
+  ctx.beginPath();
+  ctx.arc(half, half, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // If no pixels drawn, draw a test pattern
+  if (pixelsDrawn === 0) {
+    debugLog('Drawing test pattern');
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.beginPath();
+    ctx.arc(half, half, 100, 0, Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(half-50, half);
+    ctx.lineTo(half+50, half);
+    ctx.moveTo(half, half-50);
+    ctx.lineTo(half, half+50);
+    ctx.stroke();
+    for (let i=0; i<36; i++) {
+      const angle = i * 10 * Math.PI / 180;
+      ctx.beginPath();
+      ctx.moveTo(half, half);
+      ctx.lineTo(half + Math.sin(angle)*180, half - Math.cos(angle)*180);
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.font = '16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No radar data', half, half-20);
+    ctx.fillText('(test pattern)', half, half+20);
+  }
+
+  const latDeg = maxRange / 111;
+  const lonDeg = maxRange / (111 * Math.cos(site.lat * Math.PI / 180));
+  const bounds = L.latLngBounds([site.lat - latDeg, site.lon - lonDeg], [site.lat + latDeg, site.lon + lonDeg]);
+  const overlay = L.imageOverlay(canvas.toDataURL('image/png'), bounds, { opacity: 0.8, interactive: false, pane: 'overlayPane' });
+  overlay.addTo(map);
+  state.radarLayer = overlay;
+
+  return pixelsDrawn > 0;
+}
+
+// ─── Composite Radar Fallback ────────────────────────────────────
+function loadCompositeFallback(code) {
+  if (state.compositeLayer) map.removeLayer(state.compositeLayer);
+  const site = getSiteByCode(code);
+  if (!site) return;
+  const url = 'https://radar.weather.gov/Overlays/Current/Conus/RadarComposite_Conus.gif';
+  const bounds = [[22, -130], [52, -60]];
+  const overlay = L.imageOverlay(url, bounds, { opacity: 0.7, interactive: false, pane: 'overlayPane' });
+  overlay.addTo(map);
+  state.compositeLayer = overlay;
+  setStatus(`🌎 Composite (fallback)`, true);
+  legendEl.classList.add('visible');
+}
+
+// ─── Time Controls ──────────────────────────────────────────────────
+function goToIndex(idx) {
+  if (idx < 0 || idx >= state.fileList.length || state.loading) return;
+  state.currentIndex = idx;
+  loadRadarFile(state.selectedSite, state.fileList[idx]);
+}
+function nextFrame() {
+  const next = state.currentIndex + 1;
+  if (next < state.fileList.length) goToIndex(next);
+  else stopPlayback();
+}
+function prevFrame() {
+  const prev = state.currentIndex - 1;
+  if (prev >= 0) goToIndex(prev);
+}
+function togglePlayback() {
+  if (state.isPlaying) stopPlayback();
+  else startPlayback();
+}
+function startPlayback() {
+  if (state.fileList.length < 2) return;
+  state.isPlaying = true;
+  btnPlay.textContent = '⏸'; btnPlay.classList.add('playing');
+  state.playInterval = setInterval(() => {
+    nextFrame();
+    if (state.currentIndex >= state.fileList.length - 1) stopPlayback();
+  }, 700);
+}
+function stopPlayback() {
+  if (state.playInterval) clearInterval(state.playInterval);
+  state.isPlaying = false;
+  btnPlay.textContent = '▶'; btnPlay.classList.remove('playing');
+}
+
+// ─── Refresh ──────────────────────────────────────────────────────
+function refreshCurrent() {
+  if (state.selectedSite) {
+    state.parsedDataCache.clear();
+    selectSite(state.selectedSite);
+  }
+}
+
+// ─── Init ──────────────────────────────────────────────────────────
+function init() {
+  buildSitePills();
+  createAllSiteMarkers();
+  const defaultSite = RADAR_SITES.find(s => s.code === state.selectedSite) || RADAR_SITES[0];
+  state.selectedSite = defaultSite.code;
+  map.setView([defaultSite.lat, defaultSite.lon], 7);
+  updateSiteMarkerHighlight(state.selectedSite);
+  fetchFileList(state.selectedSite);
+
+  btnRefresh.addEventListener('click', refreshCurrent);
+  btnPrev.addEventListener('click', prevFrame);
+  btnNext.addEventListener('click', nextFrame);
+  btnPlay.addEventListener('click', togglePlayback);
+  timeSlider.addEventListener('input', (e) => {
+    if (state.loading) return;
+    const idx = parseInt(e.target.value);
+    if (idx !== state.currentIndex) { stopPlayback(); goToIndex(idx); }
+  });
+  window.addEventListener('resize', () => map.invalidateSize());
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight') { e.preventDefault(); nextFrame(); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); prevFrame(); }
+    if (e.key === ' ') { e.preventDefault(); togglePlayback(); }
+    if (e.key === 'r' || e.key === 'R') refreshCurrent();
+  });
+}
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
